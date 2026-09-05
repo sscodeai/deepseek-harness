@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import * as llm from '@deepseek-ai/dsh-llm'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { LruTtlCache, cacheKey } from '../src/index.ts'
 import * as cache from '../src/index.ts'
@@ -16,8 +17,13 @@ class CountingAdapter extends LlmAdapter {
   async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     this.calls += 1
     const last = options.messages.at(-1)
-    const text = typeof last?.content === 'string' ? last.content : 'ok'
-    yield { type: 'content', block: { index: 0, kind: 'text', text: `echo:${text}` } }
+    const text = typeof last?.content === 'string' ? last.content
+      : Array.isArray(last?.content) && typeof last.content[0]?.text === 'string'
+        ? last.content[0].text
+        : 'ok'
+    yield { type: 'block-start', index: 0, blockType: 'text' }
+    yield { type: 'text-delta', index: 0, text: `echo:${text}` }
+    yield { type: 'block-end', index: 0, block: { type: 'text', text: `echo:${text}` } }
     yield { type: 'usage', usage: { inputTokens: 10, outputTokens: 5 } }
     yield { type: 'finish', reason: { kind: 'stop' } }
   }
@@ -28,9 +34,9 @@ async function call(ctx: Context, text: string): Promise<string> {
   for await (const chunk of ctx.llm.stream({
     provider: 'mock',
     model: 'mock',
-    messages: [{ role: 'user', content: text }],
+    messages: [createUserMessage({ content: [{ type: 'text', text: text }], source: { kind: 'user' } })],
   })) {
-    if (chunk.type === 'content' && chunk.block.kind === 'text') out += chunk.block.text
+    if (chunk.type === 'block-end' && chunk.block.type === 'text') out += chunk.block.text
   }
   return out
 }
@@ -87,10 +93,10 @@ describe('llm-cache edge cases', () => {
     const base = {
       provider: 'mock',
       model: 'mock',
-      messages: [{ role: 'user' as const, content: 'hi' }],
+      messages: [createUserMessage({ content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } })],
     }
-    const k1 = cacheKey({ ...base, tools: [{ name: 'a', params: { x: 1 } }, { name: 'b' }] })
-    const k2 = cacheKey({ ...base, tools: [{ name: 'b' }, { name: 'a', params: { x: 1 } }] })
+    const k1 = cacheKey({ ...base, tools: [{ name: 'a', description: 'd', parameters: { x: 1 } }, { name: 'b', description: 'd', parameters: {} }] })
+    const k2 = cacheKey({ ...base, tools: [{ name: 'b', description: 'd', parameters: {} }, { name: 'a', description: 'd', parameters: { x: 1 } }] })
     const k3 = cacheKey({ ...base })
     expect(k1).toBe(k2) // tool order-insensitive
     expect(k1).not.toBe(k3) // tools change the key
@@ -116,8 +122,12 @@ describe('llm-cache edge cases', () => {
     adapter.stream = async function* (options: GenerateOptions): AsyncIterable<StreamChunk> {
       this.calls += 1
       const last = options.messages.at(-1)
-      const text = typeof last?.content === 'string' ? last.content : 'ok'
-      yield { type: 'content', block: { index: 0, kind: 'text', text: `echo:${text}` } }
+      const text = Array.isArray(last?.content) && last.content[0]?.type === 'text'
+        ? last.content[0].text
+        : 'ok'
+      yield { type: 'block-start', index: 0, blockType: 'text' }
+      yield { type: 'text-delta', index: 0, text: `echo:${text}` }
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: `echo:${text}` } }
       yield { type: 'usage', usage: { outputTokens: 3 } }
       yield { type: 'finish', reason: { kind: 'stop' } }
     }
@@ -132,7 +142,7 @@ describe('llm-cache edge cases', () => {
       for await (const chunk of ctx.llm.stream({
         provider: 'mock',
         model: 'mock',
-        messages: [{ role: 'user', content: 'hi' }],
+        messages: [createUserMessage({ content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } })],
       })) {
         if (chunk.type === 'usage') usage = chunk.usage
       }

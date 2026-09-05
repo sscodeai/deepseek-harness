@@ -45,11 +45,18 @@ export function cacheKey(options: GenerateOptions): string {
     .map(t => JSON.stringify(t, Object.keys(t).sort()))
     .sort() // tool order-insensitive: same schema in any order → same key
     .join('|')
+  // Messages carry a fresh random `id` and producer `source` per call; the
+  // model-visible identity is role + content only. Strip the envelope fields
+  // so identical prompts produce the same key across calls.
+  const messageKey = (options.messages ?? []).map(m => JSON.stringify({
+    role: m.role,
+    content: m.content,
+  })).join('|')
   const parts = [
     options.provider,
     options.model,
     options.system ?? '',
-    JSON.stringify(options.messages),
+    messageKey,
     toolKey,
     String(options.temperature ?? ''),
     String(options.maxTokens ?? ''),
