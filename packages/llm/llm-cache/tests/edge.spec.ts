@@ -17,10 +17,10 @@ class CountingAdapter extends LlmAdapter {
   async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     this.calls += 1
     const last = options.messages.at(-1)
-    const text = typeof last?.content === 'string' ? last.content
-      : Array.isArray(last?.content) && typeof last.content[0]?.text === 'string'
-        ? last.content[0].text
-        : 'ok'
+    const first = last?.content[0]
+    const text = first?.type === 'text'
+      ? first.text
+      : 'ok'
     yield { type: 'block-start', index: 0, blockType: 'text' }
     yield { type: 'text-delta', index: 0, text: `echo:${text}` }
     yield { type: 'block-end', index: 0, block: { type: 'text', text: `echo:${text}` } }
@@ -122,13 +122,15 @@ describe('llm-cache edge cases', () => {
     adapter.stream = async function* (options: GenerateOptions): AsyncIterable<StreamChunk> {
       this.calls += 1
       const last = options.messages.at(-1)
-      const text = Array.isArray(last?.content) && last.content[0]?.type === 'text'
-        ? last.content[0].text
+      const first = last?.content[0]
+      const text = first?.type === 'text'
+        ? first.text
         : 'ok'
       yield { type: 'block-start', index: 0, blockType: 'text' }
       yield { type: 'text-delta', index: 0, text: `echo:${text}` }
       yield { type: 'block-end', index: 0, block: { type: 'text', text: `echo:${text}` } }
-      yield { type: 'usage', usage: { outputTokens: 3 } }
+      // Some providers omit inputTokens on usage; exercise that runtime shape.
+      yield { type: 'usage', usage: { outputTokens: 3 } as unknown as import('@deepseek-ai/dsh-llm').TokenUsage }
       yield { type: 'finish', reason: { kind: 'stop' } }
     }
     const cacheFiber = await ctx.plugin(Object.assign(
